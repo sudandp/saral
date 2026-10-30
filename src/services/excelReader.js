@@ -99,12 +99,24 @@ export function extractSectionsAndEmployeesFromSheet(worksheet) {
   let currentSection = null;
   const employees = [];
 
-  for (let r = 1; r <= worksheet.rowCount; r++) {
-    const row = worksheet.getRow(r);
+  // Determine effective max column by scanning the first 10 rows
+  // This avoids allocating 65,535 x 256 empty cells for sparse templates (e.g. Test.xlsx)
+  let effectiveMaxCol = 1;
+  worksheet.eachRow((row, r) => {
+    if (r <= 10) {
+      row.eachCell((cell, c) => {
+        if (cell.value !== null && cell.value !== undefined && c > effectiveMaxCol) {
+          effectiveMaxCol = c;
+        }
+      });
+    }
+  });
+
+  worksheet.eachRow((row, r) => {
     const rowValues = [];
     let hasAnyValue = false;
 
-    for (let c = 1; c <= worksheet.columnCount; c++) {
+    for (let c = 1; c <= effectiveMaxCol; c++) {
       const cellVal = row.getCell(c).value;
       const textVal = (cellVal !== null && cellVal !== undefined)
         ? (typeof cellVal === 'object' && cellVal.result !== undefined ? String(cellVal.result) : String(cellVal))
@@ -113,7 +125,7 @@ export function extractSectionsAndEmployeesFromSheet(worksheet) {
       if (textVal.trim() !== '') hasAnyValue = true;
     }
 
-    if (!hasAnyValue) continue;
+    if (!hasAnyValue) return;
 
     // Check if this row is a header row
     if (isCandidateHeaderRow(rowValues)) {
@@ -125,7 +137,7 @@ export function extractSectionsAndEmployeesFromSheet(worksheet) {
         sectionIndex: sections.length,
       };
       sections.push(currentSection);
-      continue;
+      return;
     }
 
     // If we have an active section, try extracting employee data
@@ -160,7 +172,7 @@ export function extractSectionsAndEmployeesFromSheet(worksheet) {
       const empIdStr = String(emp.employeeId || '').trim().toLowerCase();
       const empNameStr = String(emp.employeeName || '').trim().toLowerCase();
       if (empIdStr.includes('total') || empNameStr.includes('total') || empIdStr.includes('sum')) {
-        continue;
+        return;
       }
 
       // Valid employee row must have ID or Name
@@ -168,7 +180,7 @@ export function extractSectionsAndEmployeesFromSheet(worksheet) {
         employees.push(emp);
       }
     }
-  }
+  });
 
   return {
     sections,

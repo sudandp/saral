@@ -125,14 +125,36 @@ export function calculateEmployeeSalary(rawEmployee, config, override = {}) {
   const oldVariableAllowance = parseSalaryNumber(rawEmployee.variableAllowance || rawEmployee.specialAllowance);
   const oldPerformanceIncentive = parseSalaryNumber(rawEmployee.performanceIncentive);
   const oldWashingAllowance = parseSalaryNumber(rawEmployee.washingAllowance);
-  const oldEmployerPF = parseSalaryNumber(rawEmployee.employerPF);
-  const oldEmployeePF = parseSalaryNumber(rawEmployee.employeePF);
-  const oldESI = parseSalaryNumber(rawEmployee.esi);
-  const oldGross = parseSalaryNumber(rawEmployee.grossSalary || rawEmployee.gross);
-  const oldCTC = parseSalaryNumber(rawEmployee.ctc);
-  const oldNet = parseSalaryNumber(rawEmployee.netSalary || rawEmployee.net);
   const oldLeavePay = parseSalaryNumber(rawEmployee.leavePay);
   const oldBonus = parseSalaryNumber(rawEmployee.bonus);
+
+  // Fallback for Rate-Master format (e.g., Test.xlsx "Salary Rate" sheet) where Gross, Net, or PF columns may not be explicitly listed
+  const sumEarnings = oldBasic + oldDA + oldHRA + oldWashingAllowance + oldVariableAllowance + oldPerformanceIncentive + oldLeavePay + oldBonus;
+  const rawGross = parseSalaryNumber(rawEmployee.grossSalary || rawEmployee.gross);
+  const oldGross = rawGross > 0 ? rawGross : sumEarnings;
+
+  const rawCTC = parseSalaryNumber(rawEmployee.ctc);
+  const oldCTC = rawCTC > 0 ? rawCTC : oldGross;
+
+  // Use explicit PF if provided; only derive fallback if PF fields were undefined/absent (not explicitly 0)
+  const hasExplicitEEPF = rawEmployee.employeePF !== undefined && rawEmployee.employeePF !== null && rawEmployee.employeePF !== '';
+  const hasExplicitERPF = rawEmployee.employerPF !== undefined && rawEmployee.employerPF !== null && rawEmployee.employerPF !== '';
+
+  const defaultPfBase = oldBasic + oldDA;
+  const oldEmployeePF = hasExplicitEEPF
+    ? parseSalaryNumber(rawEmployee.employeePF)
+    : (defaultPfBase > 0 ? Math.round(defaultPfBase * 0.12) : 0);
+  const oldEmployerPF = hasExplicitERPF
+    ? parseSalaryNumber(rawEmployee.employerPF)
+    : (defaultPfBase > 0 ? Math.round(Math.min(15000, defaultPfBase) * 0.13) : 0);
+
+  const oldESI = parseSalaryNumber(rawEmployee.esi);
+
+  // Derive initial Net if not explicitly present
+  const rawNet = parseSalaryNumber(rawEmployee.netSalary || rawEmployee.net);
+  const oldNet = rawNet > 0
+    ? rawNet
+    : Math.max(0, oldGross - oldEmployeePF - oldESI);
 
   const reviewReasons = [];
   const reviewCategories = [];

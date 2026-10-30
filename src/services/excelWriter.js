@@ -25,6 +25,7 @@ export async function generateRevisedWorkbook(originalBuffer, processedResults, 
   // Component key to value extractor
   const componentValueMap = {
     basic: (res) => res.newBasic,
+    hra: (res) => res.newHRA,
     variableAllowance: (res) => res.newVariableAllowance,
     employerPF: (res) => res.newEmployerPF,
     employeePF: (res) => res.newEmployeePF,

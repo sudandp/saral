@@ -80,19 +80,19 @@ export const REQUIRED_SALARY_COMPONENTS = [
   {
     key: 'grossSalary',
     label: 'Gross Salary',
-    required: true,
+    required: false, // In rate-master sheets (like Salary Rate), Gross is computed dynamically from earnings
     aliases: ['gross total', 'gross salary', 'gross pay', 'gross', 'total earnings', 'gross wages']
   },
   {
     key: 'ctc',
     label: 'CTC',
     required: true,
-    aliases: ['bill ctc', 'ctc', 'cost to company', 'total ctc', 'annual ctc / 12', 'ctc pm', 'bill amt']
+    aliases: ['bill ctc', 'ctc', 'cost to company', 'total ctc', 'annual ctc / 12', 'ctc pm', 'bill amt', 'billamt']
   },
   {
     key: 'netSalary',
     label: 'Net Salary',
-    required: true,
+    required: false, // In rate-master sheets (like Salary Rate), Net is computed dynamically
     aliases: ['net amount', 'net salary', 'net pay', 'net', 'take home', 'net wages']
   },
 ];
