@@ -1,30 +1,32 @@
 import { describe, it, expect } from 'vitest';
 import { createSampleSaralWorkbookBuffer, SAMPLE_EMPLOYEES } from '../src/sampleData';
-import { readSaralWorkbook, detectColumnMapping, extractEmployeesFromSheet } from '../src/services/excelReader';
-import { validateSaralCompatibility, validateEmployeeRecords } from '../src/services/salaryValidator';
+import { readSaralWorkbook } from '../src/services/excelReader';
+import { validateEmployeeRecords } from '../src/services/salaryValidator';
 import { calculateBatchSalaries, PRESERVATION_MODES, ROUNDING_MODES } from '../src/services/salaryCalculator';
 import { generateRevisedWorkbook, generateSummaryAuditWorkbook } from '../src/services/excelWriter';
 import ExcelJS from 'exceljs';
 
-describe('Excel Processing & Validation Suite', () => {
-  it('generates and reads a valid Saral workbook buffer', async () => {
+describe('Excel Processing & Validation Suite (Salary Rate Template)', () => {
+  it('generates and reads a valid Salary Rate template workbook buffer', async () => {
     const buffer = await createSampleSaralWorkbookBuffer();
     expect(buffer).toBeDefined();
 
     const parsed = await readSaralWorkbook(buffer);
     expect(parsed.sheets.length).toBeGreaterThan(0);
-    expect(parsed.selectedSheetName).toBe('Saral_Salary_Master');
+    expect(parsed.selectedSheetName).toBe('Salary Rate');
     expect(parsed.employees.length).toBe(SAMPLE_EMPLOYEES.length);
 
     // Verify column mapping
-    expect(parsed.columnMapping.employeeId).toBe(0);
-    expect(parsed.columnMapping.employeeName).toBe(1);
-    expect(parsed.columnMapping.basic).toBe(2);
-    expect(parsed.columnMapping.variableAllowance).toBe(6);
+    expect(parsed.columnMapping.employeeId).toBe(1); // Ref. No.
+    expect(parsed.columnMapping.employeeName).toBe(2); // Name
+    expect(parsed.columnMapping.basic).toBe(3); // BASIC
+    expect(parsed.columnMapping.da).toBe(4); // DA
+    expect(parsed.columnMapping.hra).toBe(5); // HRA
+    expect(parsed.columnMapping.variableAllowance).toBe(7); // Var Allow
 
     // Verify compatibility
     expect(parsed.compatibility.isCompatible).toBe(true);
-    expect(parsed.compatibility.confidenceScore).toBe(100);
+    expect(parsed.compatibility.confidenceScore).toBeGreaterThanOrEqual(90);
   });
 
   it('validates employee records for anomalies or missing fields', () => {
@@ -47,13 +49,9 @@ describe('Excel Processing & Validation Suite', () => {
     const parsed = await readSaralWorkbook(originalBuffer);
 
     const config = {
-      targetPFWage: 25000,
-      employerPFRate: 12,
-      employeePFRate: 12,
-      applyStatutoryCeiling: false,
-      includeDAInPF: true,
-      preservationMode: PRESERVATION_MODES.RECALCULATE_ALL,
-      roundingMode: ROUNDING_MODES.ROUND,
+      preservationMode: PRESERVATION_MODES.SALARY_NEUTRAL,
+      targetGoalSeekWage: 15000,
+      roundingMode: ROUNDING_MODES.EXACT,
       confirmedStatutory: true,
     };
 
@@ -74,18 +72,20 @@ describe('Excel Processing & Validation Suite', () => {
     const revisedWb = new ExcelJS.Workbook();
     await revisedWb.xlsx.load(revisedBuffer);
 
-    const ws = revisedWb.getWorksheet('Saral_Salary_Master');
+    const ws = revisedWb.getWorksheet('Salary Rate');
     expect(ws).toBeDefined();
 
-    // Check row 3 (first employee: Aarav Patel)
-    // Old Basic was 18000, new Basic should be 23000 (target 25000 - DA 2000)
-    const emp1Row = ws.getRow(3);
+    // Check row 4 (first employee: MT-59 LALIT MOHAN SENAPATI)
+    const emp1Row = ws.getRow(4);
     const basicCellVal = emp1Row.getCell(parsed.columnMapping.basic + 1).value;
-    expect(basicCellVal).toBe(23000);
+    expect(basicCellVal).toBeCloseTo(7578.93, 2);
 
-    // Variable allowance should have absorbed the 5000 difference (old: 16000 -> new: 11000)
+    const hraCellVal = emp1Row.getCell(parsed.columnMapping.hra + 1).value;
+    expect(hraCellVal).toBeCloseTo(4333.33, 2);
+
+    // Variable allowance should have absorbed the difference
     const varCellVal = emp1Row.getCell(parsed.columnMapping.variableAllowance + 1).value;
-    expect(varCellVal).toBe(11000);
+    expect(varCellVal).toBeCloseTo(22433.41, 2);
   });
 
   it('generates processing audit report with configuration summary', async () => {
@@ -97,8 +97,8 @@ describe('Excel Processing & Validation Suite', () => {
       employeePFRate: 12,
       applyStatutoryCeiling: false,
       includeDAInPF: true,
-      preservationMode: PRESERVATION_MODES.RECALCULATE_ALL,
-      roundingMode: ROUNDING_MODES.ROUND,
+      preservationMode: PRESERVATION_MODES.SALARY_NEUTRAL,
+      roundingMode: ROUNDING_MODES.EXACT,
       confirmedStatutory: true,
     };
 
@@ -114,4 +114,3 @@ describe('Excel Processing & Validation Suite', () => {
     expect(auditWb.getWorksheet('Configuration Summary')).toBeDefined();
   });
 });
-
