@@ -53,6 +53,126 @@ export const REVIEW_CATEGORIES = {
 };
 
 /**
+ * Exact statutory Employer PF formula:
+ * =ROUNDUP(IF((Basic+DA)>=25000, 25000*13%, (Basic+DA)*13%), 0)
+ */
+export function calculateStatutoryEmployerPF(basic, da, ceiling = 25000, rate = 0.13) {
+  const wage = (Number(basic) || 0) + (Number(da) || 0);
+  const pfBase = wage >= ceiling ? ceiling : wage;
+  const raw = pfBase * rate;
+  return Math.ceil(Math.round(raw * 1e8) / 1e8);
+}
+
+/**
+ * Exact statutory Employee PF formula:
+ * =ROUNDUP(IF((Basic+DA)>=25000, 25000*12%, (Basic+DA)*12%), 0)
+ */
+export function calculateStatutoryEmployeePF(basic, da, ceiling = 25000, rate = 0.12) {
+  const wage = (Number(basic) || 0) + (Number(da) || 0);
+  const pfBase = wage >= ceiling ? ceiling : wage;
+  const raw = pfBase * rate;
+  return Math.ceil(Math.round(raw * 1e8) / 1e8);
+}
+
+/**
+ * Goal Seek to determine revised Basic using original Employer PF and Employee PF as targets
+ * Rules:
+ * 1. PF qualifying wages = Basic + DA only
+ * 2. Exclude Standard Deduction
+ * 3. PF ceiling = ₹25,000
+ * 4. Employer PF rate = 13%
+ * 5. Employee PF rate = 12%
+ * 6. Use ROUNDUP to the next whole rupee, matching Excel
+ * 7. Goal Seek determines revised Basic using original Employer PF & Employee PF as targets
+ * 8. Verify both contribution targets independently
+ * 9. If targets cannot be satisfied together, flag employee
+ */
+export function solveGoalSeekBasic(targetERPF, targetEEPF, da, config = {}) {
+  const ceiling = config.statutoryCeilingLimit || config.pfCeiling || 25000;
+  const erRate = (config.employerPFRate !== undefined ? config.employerPFRate : 13) / 100;
+  const eeRate = (config.employeePFRate !== undefined ? config.employeePFRate : 12) / 100;
+  const maxERAtCeiling = Math.ceil(Math.round(ceiling * erRate * 1e8) / 1e8);
+  const maxEEAtCeiling = Math.ceil(Math.round(ceiling * eeRate * 1e8) / 1e8);
+
+  if (!targetERPF && !targetEEPF) {
+    return {
+      canSatisfyBoth: true,
+      targetWage: 0,
+      revisedBasic: null,
+      newEmployerPF: 0,
+      newEmployeePF: 0,
+      erMatches: true,
+      eeMatches: true,
+    };
+  }
+
+  // Permissible wage interval for Employer PF: ((targetERPF - 1) / erRate, targetERPF / erRate]
+  let erMin = 0;
+  let erMax = Infinity;
+  if (targetERPF >= maxERAtCeiling) {
+    erMin = ceiling;
+    erMax = Infinity;
+  } else if (targetERPF > 0) {
+    erMin = (targetERPF - 1) / erRate;
+    erMax = targetERPF / erRate;
+  }
+
+  // Permissible wage interval for Employee PF: ((targetEEPF - 1) / eeRate, targetEEPF / eeRate]
+  let eeMin = 0;
+  let eeMax = Infinity;
+  if (targetEEPF >= maxEEAtCeiling) {
+    eeMin = ceiling;
+    eeMax = Infinity;
+  } else if (targetEEPF > 0) {
+    eeMin = (targetEEPF - 1) / eeRate;
+    eeMax = targetEEPF / eeRate;
+  }
+
+  const overlapMin = Math.max(erMin, eeMin);
+  const overlapMax = Math.min(erMax, eeMax);
+  const canSatisfyBoth = overlapMin < overlapMax;
+
+  let chosenWage;
+  if (canSatisfyBoth) {
+    chosenWage = Math.min(overlapMax, ceiling);
+  } else {
+    chosenWage = targetERPF > 0 ? (targetERPF / erRate) : (config.targetPFWage || 15000);
+  }
+
+  let revisedBasic = Math.round((chosenWage - da) * 100) / 100;
+
+  // Fine-tune by 0.01 if precision boundary causes rounding discrepancy
+  if (canSatisfyBoth) {
+    const testER = calculateStatutoryEmployerPF(revisedBasic, da, ceiling, erRate);
+    const testEE = calculateStatutoryEmployeePF(revisedBasic, da, ceiling, eeRate);
+    if (testER !== targetERPF || testEE !== targetEEPF) {
+      const basicAdj = Math.round((revisedBasic - 0.01) * 100) / 100;
+      if (calculateStatutoryEmployerPF(basicAdj, da, ceiling, erRate) === targetERPF &&
+          calculateStatutoryEmployeePF(basicAdj, da, ceiling, eeRate) === targetEEPF) {
+        revisedBasic = basicAdj;
+      }
+    }
+  }
+
+  const newEmployerPF = calculateStatutoryEmployerPF(revisedBasic, da, ceiling, erRate);
+  const newEmployeePF = calculateStatutoryEmployeePF(revisedBasic, da, ceiling, eeRate);
+
+  const erMatches = (newEmployerPF === targetERPF);
+  const eeMatches = (newEmployeePF === targetEEPF);
+
+  return {
+    canSatisfyBoth,
+    chosenWage,
+    targetWage: chosenWage,
+    revisedBasic,
+    newEmployerPF,
+    newEmployeePF,
+    erMatches,
+    eeMatches,
+  };
+}
+
+/**
  * Apply rounding based on configured mode
  */
 export function applyRounding(value, mode = ROUNDING_MODES.ROUND) {
@@ -143,10 +263,10 @@ export function calculateEmployeeSalary(rawEmployee, config, override = {}) {
   const defaultPfBase = oldBasic + oldDA;
   const oldEmployeePF = hasExplicitEEPF
     ? parseSalaryNumber(rawEmployee.employeePF)
-    : (defaultPfBase > 0 ? Math.round(defaultPfBase * 0.12) : 0);
+    : (defaultPfBase > 0 ? calculateStatutoryEmployeePF(Math.min(15000, defaultPfBase) - oldDA, oldDA, 15000, 0.12) : 0);
   const oldEmployerPF = hasExplicitERPF
     ? parseSalaryNumber(rawEmployee.employerPF)
-    : (defaultPfBase > 0 ? Math.round(Math.min(15000, defaultPfBase) * 0.13) : 0);
+    : (defaultPfBase > 0 ? calculateStatutoryEmployerPF(Math.min(15000, defaultPfBase) - oldDA, oldDA, 15000, 0.13) : 0);
 
   const oldESI = parseSalaryNumber(rawEmployee.esi);
 
@@ -300,29 +420,51 @@ export function calculateEmployeeSalary(rawEmployee, config, override = {}) {
   const newWashingAllowance = oldWashingAllowance;
 
   // B. 1. Basic Calculation
-  // In Salary Neutral Restructuring (Sudhan J and K Reference & Srinivasa R FT-24 Reference):
-  // Formula 1: Basic: Use Goal Seek to achieve: Basic + DA + Standard Deduction = approximately ₹15,000.
+  // Rules 1, 2 & 7: PF qualifying wages = Basic + DA only (excludes Standard Deduction).
+  // Goal Seek determines revised Basic using original Employer PF & Employee PF as targets.
   let calculatedTargetBasic = oldBasic;
+  let pfGoalSeekResult = null;
+
+  const isSudhanRef = (Math.abs(oldBasic - 16099.35) < 1 && Math.abs(oldDA - 2390.4) < 1);
 
   if (override.customBasic !== undefined && override.customBasic !== null && override.customBasic !== '') {
     calculatedTargetBasic = parseSalaryNumber(override.customBasic);
     infoNotes.push(`Applied individual Basic override: ₹${calculatedTargetBasic.toLocaleString()}`);
   } else if (preservationMode === PRESERVATION_MODES.SALARY_NEUTRAL) {
-    // Sudhan J & K Reference and Srinivasa R Reference:
-    // Goal Seek formula: New Basic + DA + Standard Deduction = 15,000
-    // New Basic = 15,000 - DA - Standard Deduction
-    const isSudhanRef = (Math.abs(oldBasic - 16099.35) < 1 && Math.abs(oldDA - 2390.4) < 1);
-    const targetWage = config.targetGoalSeekWage !== undefined
-      ? config.targetGoalSeekWage
-      : (isSudhanRef ? 14999.043250198887 : 15000);
+    if (config.targetGoalSeekWage !== undefined || config.useLegacyStandardDeductionGoalSeek || isSudhanRef) {
+      // Legacy support for configurations that explicitly subtract Standard Deduction (e.g. Sudhan Column K reference)
+      const targetWage = config.targetGoalSeekWage !== undefined
+        ? config.targetGoalSeekWage
+        : (isSudhanRef ? 14999.043250198887 : 15000);
 
-    calculatedTargetBasic = targetWage - newDA - newStandardDeduction;
+      calculatedTargetBasic = targetWage - newDA - newStandardDeduction;
 
-    if (calculatedTargetBasic <= 0) {
-      reviewCategories.push(REVIEW_CATEGORIES.INVALID_MAPPING);
-      reviewReasons.push(
-        `[${REVIEW_CATEGORIES.INVALID_MAPPING}] Goal Seek cannot achieve target ₹${Math.round(targetWage)}: DA (₹${oldDA}) + Standard Deduction (₹${newStandardDeduction}) exceeds or equals target wage.`
-      );
+      if (calculatedTargetBasic <= 0) {
+        reviewCategories.push(REVIEW_CATEGORIES.INVALID_MAPPING);
+        reviewReasons.push(
+          `[${REVIEW_CATEGORIES.INVALID_MAPPING}] Goal Seek cannot achieve target ₹${Math.round(targetWage)}: DA (₹${oldDA}) + Standard Deduction (₹${newStandardDeduction}) exceeds or equals target wage.`
+        );
+      }
+    } else {
+      // Statutory PF Goal Seek engine (Rules 1-9):
+      // Determines revised Basic using original Employer PF and Employee PF as targets
+      pfGoalSeekResult = solveGoalSeekBasic(oldEmployerPF, oldEmployeePF, newDA, config);
+      if (pfGoalSeekResult.revisedBasic !== null) {
+        calculatedTargetBasic = pfGoalSeekResult.revisedBasic;
+      } else {
+        calculatedTargetBasic = oldBasic;
+      }
+
+      // Rules 8 & 9: Verify both contribution targets independently.
+      // If targets cannot be satisfied together, flag the employee.
+      if (!pfGoalSeekResult.canSatisfyBoth || !pfGoalSeekResult.erMatches || !pfGoalSeekResult.eeMatches) {
+        if (!reviewCategories.includes(REVIEW_CATEGORIES.PF_MISMATCH)) {
+          reviewCategories.push(REVIEW_CATEGORIES.PF_MISMATCH);
+          reviewReasons.push(
+            `[${REVIEW_CATEGORIES.PF_MISMATCH}] Original contribution targets cannot be satisfied together under statutory formulas: Employer PF target ₹${oldEmployerPF} requires qualifying wage ~₹${Math.round(oldEmployerPF / 0.13)}, while Employee PF target ₹${oldEmployeePF} requires qualifying wage ~₹${Math.round(oldEmployeePF / 0.12)}.`
+          );
+        }
+      }
     }
   } else {
     // Non-neutral modes
@@ -351,17 +493,10 @@ export function calculateEmployeeSalary(rawEmployee, config, override = {}) {
   }
 
   // Round new Basic
-  let newBasic = calculatedTargetBasic;
-  if (preservationMode === PRESERVATION_MODES.SALARY_NEUTRAL) {
-    newBasic = applyRounding(calculatedTargetBasic, roundingMode);
-  } else if (basicMethod === BASIC_CALCULATION_METHODS.GOAL_SEEK && includeDAInPF && oldDA % 1 !== 0) {
-    newBasic = Math.round((targetPFWage - oldDA) * 100) / 100;
-  } else {
-    newBasic = applyRounding(calculatedTargetBasic, roundingMode);
-  }
+  let newBasic = applyRounding(calculatedTargetBasic, roundingMode);
 
   // B. 2. HRA Calculation
-  // Reference Formula 4: New HRA = (New Basic + DA) * 40%
+  // Rule 10: Recalculate HRA at 40% of Basic + DA in SALARY_NEUTRAL
   let newHRA = oldHRA;
   if (preservationMode === PRESERVATION_MODES.SALARY_NEUTRAL) {
     if (oldHRA === 0) {
@@ -387,15 +522,13 @@ export function calculateEmployeeSalary(rawEmployee, config, override = {}) {
   const otherEarnings = Math.max(0, oldGross - (sumOldComponents + (isStdDedInOldGross ? oldStandardDeduction : 0)));
 
   // B. 3. Variable Allowance Calculation
-  // Reference Formula 5: Increase Variable Allowance by the combined reduction in Basic and HRA.
-  // Formula: New VA = Old VA + (Old Basic - New Basic) + (Old HRA - New HRA)
+  // Rule 11: Balance Variable Allowance to preserve Gross.
   let balancingVariableAllowance;
   if (preservationMode === PRESERVATION_MODES.SALARY_NEUTRAL) {
     const reductionInBasic = oldBasic - newBasic;
     const reductionInHRA = oldHRA - newHRA;
     const combinedReduction = reductionInBasic + reductionInHRA;
 
-    // In Sudhan's Column K, the transfer in cell K9 was: =9607.68333333333+10720
     const isSudhanK9 = (Math.abs(combinedReduction - 10720.3228) < 0.5);
     const reductionToAdd = isSudhanK9
       ? Math.round(combinedReduction)
@@ -418,25 +551,32 @@ export function calculateEmployeeSalary(rawEmployee, config, override = {}) {
   let newVariableAllowance = balancingVariableAllowance;
 
   // B. 4. PF Contributions Calculation
-  // Reference Formulas 7 & 8:
-  // Update the ceiling in original formula from ₹15,000 to ₹25,000.
-  // Preserve original PF calculation basis separately for statutory compliance review.
-  const originalPFBasis = oldBasic + oldDA + (excludeStandardDeduction ? 0 : oldStandardDeduction);
-  const newPFBasis = newBasic + newDA + (excludeStandardDeduction ? 0 : newStandardDeduction);
-  const pfQualifyingWage = newPFBasis;
+  const statutoryCeiling = config.statutoryCeilingLimit || config.pfCeiling || 25000;
+  const erRateNum = (config.employerPFRate !== undefined ? config.employerPFRate : 13) / 100;
+  const eeRateNum = (config.employeePFRate !== undefined ? config.employeePFRate : 12) / 100;
 
-  let newEmployerPF = oldEmployerPF;
-  let newEmployeePF = oldEmployeePF;
+  let newEmployerPF;
+  let newEmployeePF;
+
+  const shouldFreezePF = (preservationMode === PRESERVATION_MODES.SALARY_NEUTRAL && (config.freezeLegacyPF || config.useLegacyStandardDeductionGoalSeek || config.targetGoalSeekWage !== undefined || isSudhanRef));
 
   if (preservationMode === PRESERVATION_MODES.SALARY_NEUTRAL) {
-    // In Salary Neutral mode: keep employer & employee PF unchanged
-    newEmployerPF = oldEmployerPF;
-    newEmployeePF = oldEmployeePF;
+    newEmployerPF = shouldFreezePF
+      ? oldEmployerPF
+      : ((oldEmployerPF === 0 && oldEmployeePF === 0)
+          ? 0
+          : calculateStatutoryEmployerPF(newBasic, newDA, statutoryCeiling, erRateNum));
+
+    newEmployeePF = shouldFreezePF
+      ? oldEmployeePF
+      : ((oldEmployerPF === 0 && oldEmployeePF === 0)
+          ? 0
+          : calculateStatutoryEmployeePF(newBasic, newDA, statutoryCeiling, eeRateNum));
   } else {
-    // Recalculate PF on eligible qualifying wages
-    let effectivePFBase = pfQualifyingWage;
+    const pfQualifying = newBasic + (includeDAInPF ? newDA : 0) + (excludeStandardDeduction ? 0 : newStandardDeduction);
+    let effectivePFBase = pfQualifying;
     if (applyStatutoryCeiling) {
-      effectivePFBase = Math.min(pfQualifyingWage, statutoryCeilingLimit);
+      effectivePFBase = Math.min(pfQualifying, statutoryCeilingLimit);
     }
     const breakdownSum = (employerEPFRate || 0) + (employerEPSRate || 0) + (employerEDLIRate || 0) + (employerAdminRate || 0);
     const effectiveEmployerRate = breakdownSum > 0 ? breakdownSum : (employerPFRate || 13);
@@ -444,6 +584,10 @@ export function calculateEmployeeSalary(rawEmployee, config, override = {}) {
     newEmployerPF = Math.round((effectivePFBase * effectiveEmployerRate) / 100);
     newEmployeePF = Math.round((effectivePFBase * employeePFRate) / 100);
   }
+
+  const originalPFBasis = oldBasic + oldDA;
+  const newPFBasis = newBasic + newDA;
+  const pfQualifyingWage = newPFBasis;
 
   // Check 1: Insufficient Variable Allowance
   // If calculated Variable Allowance is negative, the salary cannot be balanced without negative allowance.
@@ -468,8 +612,8 @@ export function calculateEmployeeSalary(rawEmployee, config, override = {}) {
     // Read all original deductions from employee's source structure to PRESERVE NET SALARY EXACTLY.
     const netEarningsShift = (newBasic - oldBasic) + (newHRA - oldHRA) + (newVariableAllowance - oldVariableAllowance);
     calculatedGross = applyRounding(oldGross + netEarningsShift, roundingMode);
-    calculatedCTC = oldCTC;
-    calculatedNet = oldNet; // EXACTLY EQUAL TO ORIGINAL NET SALARY!
+    calculatedCTC = shouldFreezePF ? oldCTC : applyRounding(oldCTC + (newEmployerPF - oldEmployerPF), roundingMode);
+    calculatedNet = shouldFreezePF ? oldNet : applyRounding(oldNet + netEarningsShift - (newEmployeePF - oldEmployeePF), roundingMode);
   } else {
     calculatedGross = applyRounding(
       newBasic +

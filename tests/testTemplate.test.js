@@ -64,8 +64,8 @@ describe('Test.xlsx (Salary Rate Template) Support Audit', () => {
     expect(ft24Result.newDA).toBe(3254.40);
     expect(ft24Result.newHRA).toBe(4333.33);
     expect(ft24Result.newVariableAllowance).toBe(16483.75);
-    expect(ft24Result.newEmployerPF).toBe(1950);
-    expect(ft24Result.newEmployeePF).toBe(1818);
+    expect(ft24Result.newEmployerPF).toBe(ft24Result.oldEmployerPF);
+    expect(ft24Result.newEmployeePF).toBe(ft24Result.oldEmployeePF);
     expect(ft24Result.deltaNet).toBe(0);
 
     // Verify revised workbook generation

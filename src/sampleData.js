@@ -1,5 +1,39 @@
 import ExcelJS from 'exceljs';
 
+export const ARVIND_REFERENCE = {
+  employeeId: 'EMP_ARVIND',
+  employeeName: 'Arvind for GR Sankalpa',
+  basic: 16423,
+  da: 2826,
+  standardDeduction: 4166.666666666667,
+  hra: 7699.60,
+  variableAllowance: 20054.733333333348,
+  performanceIncentive: 12080,
+  grossSalary: 63250,
+  employerPF: 1950,
+  employeePF: 1800,
+  ctc: 65200,
+  netSalary: 60400,
+};
+
+export const SRINIVASA_REFERENCE = {
+  employeeId: 'FT-24',
+  employeeName: 'SRINIVASA R',
+  basic: 11895.05,
+  da: 3254.40,
+  standardDeduction: 4166.67,
+  hra: 6059.78,
+  washingAllowance: 300,
+  variableAllowance: 10441.18,
+  leavePay: 1037.63,
+  bonus: 1261.94,
+  grossSalary: 34249.98,
+  employerPF: 1950,
+  employeePF: 1818,
+  ctc: 35000,
+  netSalary: 31382,
+};
+
 export const SAMPLE_EMPLOYEES = [
   {
     "slno": 1,
